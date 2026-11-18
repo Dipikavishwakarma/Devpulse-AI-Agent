@@ -131,12 +131,37 @@ class TaskItem:
 # ════════════════════════════════════════════════════════════════
 
 def _extract_json(text: str) -> Any | None:
-    """Parse JSON from raw text or markdown-fenced code blocks."""
-    for candidate in [text, *re.findall(r"```(?:json)?\s*\n(.*?)\n```", text, re.S)]:
+    """Parse JSON from raw text, markdown-fenced code blocks, or substring search."""
+    if not text:
+        return None
+
+    # 1. Direct parse
+    try:
+        return json.loads(text.strip())
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # 2. Markdown fenced code blocks (with or without indentation)
+    matches = re.findall(r"```(?:json)?\s*[\r\n]+(.*?)[\r\n]+\s*```", text, re.S)
+    for candidate in matches:
         try:
             return json.loads(candidate.strip())
         except (json.JSONDecodeError, ValueError):
             continue
+
+    # 3. Substring between first { or [ and last } or ]
+    first_brace = text.find("{")
+    first_bracket = text.find("[")
+    starts = [i for i in (first_brace, first_bracket) if i != -1]
+    if starts:
+        start = min(starts)
+        end = max(text.rfind("}"), text.rfind("]"))
+        if end > start:
+            try:
+                return json.loads(text[start : end + 1].strip())
+            except (json.JSONDecodeError, ValueError):
+                pass
+
     return None
 
 

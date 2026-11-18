@@ -108,7 +108,8 @@ If the GitHub API rate limit is hit, the system automatically falls back to cach
 | ✅ **Task Checklist** | P0–P2 prioritised backlog with categories |
 | 🤖 **Decision Log** | Full transparency — see *why* each agent chose each step |
 | 📥 **One-Click Download** | Export the full audit as a `.md` report |
-| 🌙 **Dark-Mode UI** | Executive-quality dashboard with custom CSS cards and badges |
+| 🌙 **Dark-Mode UI** | Executive-quality dashboard with WCAG AA contrast & ARIA accessibility |
+| 🧪 **Automated Test Suite** | 21 `pytest` unit tests for CI/CD with mocked LLM pipelines |
 | 🛡️ **Fallback Mode** | Demo never fails — cached data activates on rate limits |
 
 ---
@@ -190,15 +191,40 @@ The app opens at **http://localhost:8501**.
 
 ---
 
+## 🧪 Running Automated Tests
+
+DevPulse AI includes a comprehensive unit test suite powered by `pytest` covering URL parsing, fallback mode, health score calculations, tree summarization, agent JSON extraction, and report generation:
+
+```bash
+# Run the test suite
+python -m pytest tests/ -v
+
+# Or with coverage summary
+python -m pytest tests/ --tb=short
+```
+
+### What is tested:
+- ✅ **GitHub URL Parser**: 6+ URL formats (HTTPS, `.git`, shorthand `owner/repo`, subpaths, trailing slashes, and error validation on invalid inputs).
+- ✅ **Fallback & Health Score**: Fallback dataset integrity, multi-factor health score (0-100) computation for full vs minimal repos.
+- ✅ **Key File Selection**: Priority pattern matching (README, CI/CD workflows, Docker, dependencies) and tree summarization.
+- ✅ **JSON & Agent Parsers**: Markdown-fenced code block parsing, nested JSON extraction, severity capitalization, and graceful fallbacks.
+- ✅ **Pipeline Compilation**: End-to-end full audit report Markdown generation.
+- ✅ **Mocked Agent Execution**: Verified Orchestrator and Security Auditor pipelines using mocked LLM calls (runs offline in CI/CD without an API key).
+
+---
+
 ## 📂 Project Structure
 
 ```
 devpulse-ai/
-├── app.py              # Streamlit UI, pipeline orchestration, dashboard
+├── app.py              # Accessible Streamlit UI, pipeline orchestration, dashboard
 ├── agents.py           # Agent classes, GitHub tool, data models, report builder
-├── requirements.txt    # Python dependencies
+├── tests/
+│   ├── __init__.py     # Test package indicator
+│   └── test_agents.py  # Automated pytest test suite (21 unit tests)
+├── requirements.txt    # Python dependencies (Streamlit, Gemini SDK, requests, pytest)
 ├── .env.example        # Template for API key configuration
-└── README.md           # This file
+└── README.md           # Project documentation and setup guide
 ```
 
 ---
