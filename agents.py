@@ -6,10 +6,10 @@ Uses Google Gemini API for intelligent code analysis and the
 GitHub REST API (unauthenticated, public repos) for live data.
 
 Agents:
-  • OrchestratorAgent        – interprets user goals, plans workflow
-  • CodeSecurityAuditorAgent – scans for vulnerabilities, bugs, quality
-  • DocumentationAgent       – generates architecture docs, README, tasks
-  • GitHubTool               – fetches repo metadata, file trees, source
+- OrchestratorAgent        – interprets user goals, plans workflow
+- CodeSecurityAuditorAgent – scans for vulnerabilities, bugs, quality
+- DocumentationAgent       – generates architecture docs, README, tasks
+- GitHubTool               – fetches repo metadata, file trees, source
 """
 
 from __future__ import annotations
@@ -39,22 +39,25 @@ MAX_FILES_TO_FETCH = 15
 
 DEMO_REPO_URL = "https://github.com/tiangolo/fastapi"
 
-# Patterns for files worth fetching
-KEY_PATTERNS: list[str] = [
-    r"^README\.md$", r"^readme\.md$",
-    r"^setup\.py$", r"^pyproject\.toml$",
-    r"^requirements.*\.txt$", r"^Pipfile$",
-    r"^package\.json$", r"^Cargo\.toml$", r"^go\.mod$",
-    r"^Dockerfile$", r"^docker-compose\.ya?ml$",
-    r"^\.github/workflows/.*\.ya?ml$",
-    r"^Makefile$", r"^\.env\.example$", r"^\.env$",
-    r"^app\.(py|js|ts)$", r"^main\.(py|js|ts|go|rs)$",
-    r"^index\.(py|js|ts)$", r"^server\.(py|js|ts)$",
-    r"^manage\.py$",
-    r"^config.*\.(py|json|ya?ml|toml)$",
-    r"^settings\.(py|json|ya?ml|toml)$",
-    r"^src/.*\.(py|js|ts|go|rs)$",
-    r"^lib/.*\.(py|js|ts)$",
+# Pre-compiled patterns for files worth fetching
+KEY_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(p, re.I)
+    for p in [
+        r"^README\.md$", r"^readme\.md$",
+        r"^setup\.py$", r"^pyproject\.toml$",
+        r"^requirements.*\.txt$", r"^Pipfile$",
+        r"^package\.json$", r"^Cargo\.toml$", r"^go\.mod$",
+        r"^Dockerfile$", r"^docker-compose\.ya?ml$",
+        r"^\.github/workflows/.*\.ya?ml$",
+        r"^Makefile$", r"^\.env\.example$", r"^\.env$",
+        r"^app\.(py|js|ts)$", r"^main\.(py|js|ts|go|rs)$",
+        r"^index\.(py|js|ts)$", r"^server\.(py|js|ts)$",
+        r"^manage\.py$",
+        r"^config.*\.(py|json|ya?ml|toml)$",
+        r"^settings\.(py|json|ya?ml|toml)$",
+        r"^src/.*\.(py|js|ts|go|rs)$",
+        r"^lib/.*\.(py|js|ts)$",
+    ]
 ]
 
 SOURCE_EXTS = {
@@ -69,6 +72,8 @@ SOURCE_EXTS = {
 
 @dataclass
 class RepoMetadata:
+    """Metadata summary for a GitHub repository."""
+
     name: str = ""
     full_name: str = ""
     description: str = ""
@@ -89,6 +94,8 @@ class RepoMetadata:
 
 @dataclass
 class RepoFile:
+    """Represents a fetched source or configuration file from a repository."""
+
     path: str
     content: str
     size: int
@@ -96,6 +103,8 @@ class RepoFile:
 
 @dataclass
 class TreeEntry:
+    """Represents a file or directory entry in a Git repository tree."""
+
     path: str
     type: str          # "blob" | "tree"
     size: int = 0
@@ -103,6 +112,8 @@ class TreeEntry:
 
 @dataclass
 class AgentDecision:
+    """Audit trail record for an autonomous agent action."""
+
     agent: str
     action: str
     reasoning: str
@@ -111,6 +122,8 @@ class AgentDecision:
 
 @dataclass
 class SecurityFinding:
+    """Structured security or code quality issue identified during audit."""
+
     severity: str      # HIGH | MEDIUM | LOW
     title: str
     description: str
@@ -120,6 +133,8 @@ class SecurityFinding:
 
 @dataclass
 class TaskItem:
+    """Prioritised follow-up action item generated from analysis."""
+
     priority: str      # P0 | P1 | P2
     title: str
     description: str
@@ -169,7 +184,7 @@ def summarize_tree(tree: List[TreeEntry], cap: int = 60) -> str:
     """Human-readable summary of a repo tree for LLM context."""
     dirs: set[str] = set()
     top_files: list[str] = []
-    for e in tree:
+    for e in tree[:cap * 20]:
         if e.type == "tree":
             dirs.add(e.path.split("/")[0])
         elif e.path.count("/") == 0:
@@ -199,8 +214,13 @@ class RateLimitError(GitHubToolError):
 
 class GitHubTool:
     """Fetches live data from the GitHub REST API (no token needed for
-    public repos).  Includes a full fallback dataset so the demo never
+    public repos). Includes a full fallback dataset so the demo never
     fails during a live presentation."""
+
+    def __init__(self) -> None:
+        """Initialize an HTTP session for connection reuse."""
+        self._session = requests.Session()
+        self._session.headers.update({"Accept": "application/vnd.github+json"})
 
     # ── URL parsing ───────────────────────────────────────────
     @staticmethod
@@ -223,13 +243,11 @@ class GitHubTool:
         )
 
     # ── Low-level GET ─────────────────────────────────────────
-    @staticmethod
-    def _get(endpoint: str, timeout: int = 15) -> dict | list:
+    def _get(self, endpoint: str, timeout: int = 15) -> dict | list:
+        """Perform a GET request against the GitHub REST API."""
         url = f"{GITHUB_API}{endpoint}" if endpoint.startswith("/") else endpoint
         try:
-            r = requests.get(url, timeout=timeout, headers={
-                "Accept": "application/vnd.github+json",
-            })
+            r = self._session.get(url, timeout=timeout)
         except requests.RequestException as exc:
             raise GitHubToolError(f"Network error: {exc}") from exc
         if r.status_code == 403:
@@ -242,6 +260,7 @@ class GitHubTool:
 
     # ── Metadata ──────────────────────────────────────────────
     def fetch_metadata(self, owner: str, repo: str) -> RepoMetadata:
+        """Fetch and normalize repository metadata from GitHub."""
         data = self._get(f"/repos/{owner}/{repo}")
         lic = data.get("license") or {}
         return RepoMetadata(
@@ -265,23 +284,25 @@ class GitHubTool:
 
     # ── File tree ─────────────────────────────────────────────
     def fetch_tree(self, owner: str, repo: str, branch: str = "main") -> List[TreeEntry]:
+        """Fetch the recursive repository file tree for a given branch."""
         data = self._get(f"/repos/{owner}/{repo}/git/trees/{branch}?recursive=1")
-        entries = []
-        for item in data.get("tree", []):
-            entries.append(TreeEntry(
+        return [
+            TreeEntry(
                 path=item["path"],
                 type=item["type"],
                 size=item.get("size", 0),
-            ))
-        return entries
+            )
+            for item in data.get("tree", [])
+        ]
 
     # ── Single file content ───────────────────────────────────
-    @staticmethod
-    def fetch_file_content(owner: str, repo: str, path: str,
-                           branch: str = "main") -> str:
+    def fetch_file_content(
+        self, owner: str, repo: str, path: str, branch: str = "main"
+    ) -> str:
+        """Fetch raw text content for a single file from GitHub."""
         url = f"{RAW_GH}/{owner}/{repo}/{branch}/{path}"
         try:
-            r = requests.get(url, timeout=15)
+            r = self._session.get(url, timeout=15)
             if r.status_code == 200:
                 return r.text
         except requests.RequestException:
@@ -298,18 +319,15 @@ class GitHubTool:
         for entry in tree:
             if entry.type != "blob":
                 continue
-            # Match against priority patterns
-            if any(re.match(p, entry.path, re.I) for p in KEY_PATTERNS):
+            if any(p.match(entry.path) for p in KEY_PATTERNS):
                 if entry.size <= MAX_FILE_SIZE:
                     selected.append(entry.path)
                 continue
-            # Collect source files for secondary selection
             ext = "." + entry.path.rsplit(".", 1)[-1] if "." in entry.path else ""
             if ext in SOURCE_EXTS and entry.size <= MAX_FILE_SIZE:
                 depth = entry.path.count("/")
                 source_candidates.append((depth, entry.path))
 
-        # Add shallowest source files up to the cap
         source_candidates.sort()
         remaining = MAX_FILES_TO_FETCH - len(selected)
         for _, path in source_candidates[:max(0, remaining)]:
@@ -318,9 +336,10 @@ class GitHubTool:
         return selected[:MAX_FILES_TO_FETCH]
 
     # ── Batch fetch ───────────────────────────────────────────
-    def fetch_key_files(self, owner: str, repo: str,
-                        tree: List[TreeEntry],
-                        branch: str = "main") -> List[RepoFile]:
+    def fetch_key_files(
+        self, owner: str, repo: str, tree: List[TreeEntry], branch: str = "main"
+    ) -> List[RepoFile]:
+        """Download selected key files up to MAX_TOTAL_CONTENT bytes."""
         paths = self.select_key_files(tree)
         files: list[RepoFile] = []
         total = 0
@@ -341,6 +360,7 @@ class GitHubTool:
         tree: List[TreeEntry],
         files: List[RepoFile],
     ) -> Tuple[int, Dict[str, int]]:
+        """Compute a 0–100 repository health score and category breakdown."""
         paths = {e.path.lower() for e in tree}
         blob_names = {e.path.split("/")[-1].lower() for e in tree if e.type == "blob"}
         breakdown: Dict[str, int] = {}
@@ -380,7 +400,7 @@ class GitHubTool:
         breakdown["Description"] = 5 if meta.description else 0
         breakdown["Topics"] = 5 if meta.topics else 0
 
-        raw = sum(breakdown.values())          # max theoretical 90
+        raw = sum(breakdown.values())
         score = min(100, int(raw * 100 / 90))
         return score, breakdown
 
@@ -432,11 +452,10 @@ import sqlite3, os, hashlib
 
 app = FastAPI(title="Demo API", version="0.1.0")
 
-# ⚠ CORS wildcard — allows every origin
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
 
-SECRET_KEY = "changeme-insecure-key-12345"   # ⚠ hardcoded secret
+SECRET_KEY = "changeme-insecure-key-12345"
 DB_PATH = os.getenv("DB_PATH", "app.db")
 
 def get_db():
@@ -448,7 +467,6 @@ def get_db():
 
 @app.get("/users/{user_id}")
 def get_user(user_id: str, db=Depends(get_db)):
-    # ⚠ SQL injection — string interpolation
     row = db.execute(f"SELECT * FROM users WHERE id = \\'{user_id}\\'").fetchone()
     if not row:
         raise HTTPException(404, "User not found")
@@ -457,19 +475,17 @@ def get_user(user_id: str, db=Depends(get_db)):
 @app.post("/login")
 def login(username: str = Query(...), password: str = Query(...),
           db=Depends(get_db)):
-    # ⚠ password in query string, no rate limiting
-    hashed = hashlib.md5(password.encode()).hexdigest()   # ⚠ weak hash
+    hashed = hashlib.md5(password.encode()).hexdigest()
     row = db.execute(
         f"SELECT * FROM users WHERE username=\\'{username}\\' "
         f"AND password_hash=\\'{hashed}\\'"
     ).fetchone()
     if not row:
         raise HTTPException(401, "Bad credentials")
-    return {"token": SECRET_KEY + str(row[0])}   # ⚠ insecure token
+    return {"token": SECRET_KEY + str(row[0])}
 
 @app.get("/files")
 def list_files(directory: str = Query(".")):
-    # ⚠ path traversal — no sanitisation
     return {"files": os.listdir(directory)}
 
 @app.get("/health")
@@ -477,8 +493,10 @@ def health():
     return {"status": "ok"}
 '''
 
-        demo_requirements = "fastapi>=0.100.0\nuvicorn[standard]>=0.23.0\npydantic>=2.0\n" \
-                            "python-multipart>=0.0.6\nsqlite3\nrequests\n"
+        demo_requirements = (
+            "fastapi>=0.100.0\nuvicorn[standard]>=0.23.0\npydantic>=2.0\n"
+            "python-multipart>=0.0.6\nsqlite3\nrequests\n"
+        )
 
         demo_pyproject = '''\
 [build-system]
@@ -509,17 +527,26 @@ class BaseAgent:
     """Shared Gemini client, decision logging, and retry logic."""
 
     def __init__(self, api_key: str, model: str = DEFAULT_MODEL):
+        """Initialize the Gemini API client and decision log."""
         self.client = genai.Client(api_key=api_key)
         self.model = model
         self.decisions: list[AgentDecision] = []
 
-    def _log(self, action: str, reasoning: str):
+    def _log(self, action: str, reasoning: str) -> None:
+        """Record a structured decision step for this agent."""
         self.decisions.append(AgentDecision(
             agent=self.__class__.__name__, action=action, reasoning=reasoning,
         ))
 
-    def _call(self, prompt: str, *, system: str = "",
-              temperature: float = 0.35, retries: int = 2) -> str:
+    def _call(
+        self,
+        prompt: str,
+        *,
+        system: str = "",
+        temperature: float = 0.35,
+        retries: int = 2,
+    ) -> str:
+        """Invoke Gemini with automatic backoff retries on transient failures."""
         cfg = types.GenerateContentConfig(
             system_instruction=system or None,
             temperature=temperature,
@@ -533,11 +560,11 @@ class BaseAgent:
                 if resp and resp.text:
                     return resp.text
                 last_err = "Empty response from Gemini"
-            except Exception as exc:            # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 last_err = str(exc)
                 if attempt <= retries:
                     time.sleep(1.5 * attempt)
-        return f"[Agent error after {retries+1} attempts: {last_err}]"
+        return f"[Agent error after {retries + 1} attempts: {last_err}]"
 
 
 # ════════════════════════════════════════════════════════════════
@@ -550,14 +577,14 @@ class OrchestratorAgent(BaseAgent):
 
     SYSTEM = (
         "You are the **Orchestrator Agent** in the DevPulse AI multi-agent "
-        "system.  Given a user goal, repository metadata, and a file-tree "
-        "summary, produce a clear, numbered workflow plan.  For each step "
-        "explain *what* to do and *why*.  Prioritise steps that best serve "
-        "the user's stated goal.  Be concise but thorough."
+        "system. Given a user goal, repository metadata, and a file-tree "
+        "summary, produce a clear, numbered workflow plan. For each step "
+        "explain *what* to do and *why*. Prioritise steps that best serve "
+        "the user's stated goal. Be concise but thorough."
     )
 
-    def plan(self, goal: str, meta: RepoMetadata,
-             tree: List[TreeEntry]) -> str:
+    def plan(self, goal: str, meta: RepoMetadata, tree: List[TreeEntry]) -> str:
+        """Generate a prioritised multi-step workflow plan for the repository."""
         tree_summary = summarize_tree(tree)
         prompt = (
             f"## User Goal\n{goal}\n\n"
@@ -594,7 +621,7 @@ class CodeSecurityAuditorAgent(BaseAgent):
     anti-patterns, and code-quality issues."""
 
     SYSTEM = (
-        "You are a **Senior Security Auditor & Code Reviewer**.  "
+        "You are a **Senior Security Auditor & Code Reviewer**. "
         "Analyse the provided source files for:\n"
         "• Security vulnerabilities (injections, hardcoded secrets, "
         "insecure crypto, path traversal, SSRF, XSS, CSRF, …)\n"
@@ -607,9 +634,13 @@ class CodeSecurityAuditorAgent(BaseAgent):
     )
 
     def audit(
-        self, files: List[RepoFile], meta: RepoMetadata,
-        goal: str, plan: str,
+        self,
+        files: List[RepoFile],
+        meta: RepoMetadata,
+        goal: str,
+        plan: str,
     ) -> Tuple[List[SecurityFinding], str]:
+        """Audit source files and return structured findings plus an executive summary."""
         if not files:
             return [], "No source files available for audit."
 
@@ -625,36 +656,36 @@ class CodeSecurityAuditorAgent(BaseAgent):
             f"## Source Files\n{files_block}\n\n"
             "---\n"
             "Produce **valid JSON** (no markdown fences) with your security "
-            "& quality audit.  Include at least one finding per analysed file "
-            "if issues exist.  Use exact file paths."
+            "& quality audit. Include at least one finding per analysed file "
+            "if issues exist. Use exact file paths."
         )
         raw = self._call(prompt, system=self.SYSTEM, temperature=0.2)
         findings, summary = self._parse(raw)
         self._log(
             f"Completed audit — {len(findings)} findings",
-            f"HIGH={sum(1 for f in findings if f.severity=='HIGH')} "
-            f"MED={sum(1 for f in findings if f.severity=='MEDIUM')} "
-            f"LOW={sum(1 for f in findings if f.severity=='LOW')}",
+            f"HIGH={sum(1 for f in findings if f.severity == 'HIGH')} "
+            f"MED={sum(1 for f in findings if f.severity == 'MEDIUM')} "
+            f"LOW={sum(1 for f in findings if f.severity == 'LOW')}",
         )
         return findings, summary
 
-    # ── Parse Gemini response ─────────────────────────────────
     @staticmethod
     def _parse(raw: str) -> Tuple[List[SecurityFinding], str]:
+        """Parse JSON audit output into SecurityFinding objects and a summary string."""
         data = _extract_json(raw)
         if data and isinstance(data, dict):
             summary = data.get("summary", "")
-            findings = []
-            for f in data.get("findings", []):
-                findings.append(SecurityFinding(
+            findings = [
+                SecurityFinding(
                     severity=str(f.get("severity", "MEDIUM")).upper(),
                     title=f.get("title", "Untitled"),
                     description=f.get("description", ""),
                     file_path=f.get("file_path", "unknown"),
                     recommendation=f.get("recommendation", ""),
-                ))
+                )
+                for f in data.get("findings", [])
+            ]
             return findings, summary
-        # Fallback: treat the entire response as a summary
         return [], raw[:2000]
 
 
@@ -665,11 +696,14 @@ class CodeSecurityAuditorAgent(BaseAgent):
 class DocumentationAgent(BaseAgent):
     """Generates architecture docs, README, and a prioritised task list."""
 
-    # ── Architecture doc ──────────────────────────────────────
     def generate_architecture(
-        self, files: List[RepoFile], meta: RepoMetadata,
-        tree: List[TreeEntry], security_summary: str,
+        self,
+        files: List[RepoFile],
+        meta: RepoMetadata,
+        tree: List[TreeEntry],
+        security_summary: str,
     ) -> str:
+        """Generate a Markdown architecture and design document for the repository."""
         tree_summary = summarize_tree(tree)
         files_block = "\n\n".join(
             f"### `{f.path}`\n```\n{f.content[:6000]}\n```" for f in files[:8]
@@ -698,11 +732,13 @@ class DocumentationAgent(BaseAgent):
                   "Analysed components, tech stack, and data flow.")
         return doc
 
-    # ── README generation ─────────────────────────────────────
     def generate_readme(
-        self, meta: RepoMetadata, architecture: str,
+        self,
+        meta: RepoMetadata,
+        architecture: str,
         findings: List[SecurityFinding],
     ) -> str:
+        """Generate a polished open-source README.md from repository analysis."""
         finding_summary = "\n".join(
             f"- [{f.severity}] {f.title}" for f in findings[:10]
         )
@@ -729,11 +765,14 @@ class DocumentationAgent(BaseAgent):
                   "Created installation, usage, and contribution sections.")
         return readme
 
-    # ── Task checklist ────────────────────────────────────────
     def generate_tasks(
-        self, findings: List[SecurityFinding], architecture: str,
-        goal: str, meta: RepoMetadata,
+        self,
+        findings: List[SecurityFinding],
+        architecture: str,
+        goal: str,
+        meta: RepoMetadata,
     ) -> List[TaskItem]:
+        """Generate a prioritised backlog of TaskItem entries."""
         finding_lines = "\n".join(
             f"- [{f.severity}] {f.title} in `{f.file_path}`"
             for f in findings[:15]
@@ -750,12 +789,12 @@ class DocumentationAgent(BaseAgent):
             '```json\n[{"priority":"P0|P1|P2","title":"…",'
             '"description":"…","category":"Security|Performance|'
             'Documentation|Testing|DevOps"}]\n```\n'
-            "Include 8-15 tasks.  P0 = critical/immediate, P1 = important, "
+            "Include 8-15 tasks. P0 = critical/immediate, P1 = important, "
             "P2 = nice-to-have."
         )
         raw = self._call(prompt, system=(
             "You are a senior engineering manager creating an actionable "
-            "task backlog.  Return **valid JSON only**."
+            "task backlog. Return **valid JSON only**."
         ), temperature=0.25)
         tasks = self._parse_tasks(raw)
         self._log(f"Generated {len(tasks)} task items",
@@ -764,6 +803,7 @@ class DocumentationAgent(BaseAgent):
 
     @staticmethod
     def _parse_tasks(raw: str) -> List[TaskItem]:
+        """Parse JSON task items into TaskItem instances."""
         data = _extract_json(raw)
         if isinstance(data, list):
             return [
@@ -772,10 +812,10 @@ class DocumentationAgent(BaseAgent):
                     title=t.get("title", "Untitled"),
                     description=t.get("description", ""),
                     category=t.get("category", "General"),
-                ) for t in data
+                )
+                for t in data
             ]
-        return [TaskItem("P1", "Review raw agent output",
-                         raw[:500], "General")]
+        return [TaskItem("P1", "Review raw agent output", raw[:500], "General")]
 
 
 # ════════════════════════════════════════════════════════════════
@@ -798,7 +838,7 @@ def build_full_report(
     pri_icon = {"P0": "🔴", "P1": "🟡", "P2": "🔵"}
 
     sections = [
-        f"# DevPulse AI — Full Audit Report",
+        "# DevPulse AI — Full Audit Report",
         f"**Repository:** [{meta.full_name}]({meta.html_url})  ",
         f"**Language:** {meta.language}  |  **Stars:** {meta.stars:,}  "
         f"|  **Forks:** {meta.forks:,}  |  **Health Score:** {health_score}/100\n",
